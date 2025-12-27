@@ -242,17 +242,21 @@ class EvoAAE:
         
         X_val_tensor = torch.FloatTensor(X_val).to(self.device)
         self.model.eval()
-        with torch.no_grad():
-            val_recon_errors = self.model.compute_reconstruction_error(X_val_tensor)
+        val_recon_errors = self.model.compute_reconstruction_error(X_val_tensor)
         
         # 使用95%ile作为阈值（假设95%的正常数据重建误差都在这个值以下）
-        self.threshold = np.percentile(val_recon_errors.cpu().numpy(), 95)
+        self.threshold = np.percentile(val_recon_errors, 95)
+        val_mean = np.mean(val_recon_errors)
+        val_median = np.median(val_recon_errors)
+        val_min = np.min(val_recon_errors)
+        val_max = np.max(val_recon_errors)
+        
         print(f"阈值已计算: {self.threshold:.6f}")
         print(f"   验证集重建误差统计:")
-        print(f"     - 最小值: {val_recon_errors.min():.6f}")
-        print(f"     - 最大值: {val_recon_errors.max():.6f}")
-        print(f"     - 平均值: {val_recon_errors.mean():.6f}")
-        print(f"     - 中位数: {np.median(val_recon_errors.cpu().numpy()):.6f}")
+        print(f"     - 最小值: {val_min:.6f}")
+        print(f"     - 最大值: {val_max:.6f}")
+        print(f"     - 平均值: {val_mean:.6f}")
+        print(f"     - 中位数: {val_median:.6f}")
         print(f"     - 95%ile: {self.threshold:.6f}")
         
         return self.training_history
