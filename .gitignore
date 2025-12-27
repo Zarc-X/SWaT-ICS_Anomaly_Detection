@@ -1,0 +1,16 @@
+# vscode文件
+.vscode/
+
+# Python缓存文件
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 数据集和模型文件
+data/
+processed_data/
+models/
+
+# 结果文件
+results/

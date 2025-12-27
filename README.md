@@ -1,0 +1,5 @@
+每个人的算法写在algorithms/名字X之下，可视化等输出也在这个文件夹。
+如果需要进一步数据处理，将处理后的数据也放入自己名字X文件夹下。
+数据预处理后针对数据的可视化放在preprocess/results下。
+不同的采样频率，窗长，步长等参数通过命令参数传入。参考preprocess/README_preprocess.md。
+需要不同预处理版本自行设置，生成的数据文件在processed_data下。
