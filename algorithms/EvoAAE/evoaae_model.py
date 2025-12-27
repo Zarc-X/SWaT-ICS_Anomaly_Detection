@@ -63,43 +63,64 @@ class EvoAAE:
             else:
                 base[key] = value
     
-    def fit(self, X, epochs=50, pso_pop_size=20, pso_max_iter=30):
+    def fit(self, X_normal, X_anomaly=None, epochs=50, pso_pop_size=20, pso_max_iter=30):
         """
-        训练EvoAAE模型（论文完整流程）
-        1. 预处理数据
-        2. PSO优化超参数
+        训练EvoAAE模型（修改策略：只用正常数据训练）
+        1. 预处理正常数据
+        2. PSO优化超参数（在正常数据上）
         3. 训练最终模型
+        4. 在验证集（正常数据）上计算阈值
+        
+        Args:
+            X_normal: 正常数据（训练数据）
+            X_anomaly: 异常数据（可选，用于后续测试，不用于训练）
+            epochs: 训练轮数
+            pso_pop_size: PSO种群大小
+            pso_max_iter: PSO最大迭代次数
         """
         print("=" * 60)
-        print("开始训练EvoAAE模型")
+        print("开始训练EvoAAE模型（仅用正常数据）")
         print("=" * 60)
         
-        # 步骤1: 数据预处理
-        print("\n1. 数据预处理...")
-        windows, self.preprocessor = preprocess_data_for_evoaae(
-            X,
+        # 步骤1: 预处理正常数据
+        print("\n1. 预处理正常数据...")
+        windows_normal, self.preprocessor = preprocess_data_for_evoaae(
+            X_normal,
             window_size=self.config['preprocessing']['window_size'],
             step_size=self.config['preprocessing']['step_size'],
             apply_spectral_residual=self.config['preprocessing']['apply_spectral_residual']
         )
         
-        # 数据集划分
-        n_windows = len(windows)
-        train_size = int(0.7 * n_windows)
-        val_size = int(0.15 * n_windows)
+        # 仅在正常数据上划分训练/验证集
+        n_windows = len(windows_normal)
+        train_size = int(0.8 * n_windows)  # 80%训练，20%验证
+        val_size = n_windows - train_size
         
         indices = np.random.permutation(n_windows)
         train_idx = indices[:train_size]
-        val_idx = indices[train_size:train_size + val_size]
-        test_idx = indices[train_size + val_size:]
+        val_idx = indices[train_size:]
         
-        X_train = windows[train_idx]
-        X_val = windows[val_idx]
-        X_test = windows[test_idx]
+        X_train = windows_normal[train_idx]
+        X_val = windows_normal[val_idx]
         
-        print(f"训练集: {len(X_train)} 个窗口")
-        print(f"验证集: {len(X_val)} 个窗口")
-        print(f"测试集: {len(X_test)} 个窗口")
+        print("训练集和验证集已准备")
+        print(f"  训练集: {len(X_train)} 个窗口")
+        print(f"  验证集: {len(X_val)} 个窗口")
+        
+        # 如果提供了异常数据，也预处理它
+        if X_anomaly is not None:
+            print("\n预处理异常数据...")
+            windows_anomaly, _ = preprocess_data_for_evoaae(
+                X_anomaly,
+                window_size=self.config['preprocessing']['window_size'],
+                step_size=self.config['preprocessing']['step_size'],
+                apply_spectral_residual=self.config['preprocessing']['apply_spectral_residual']
+            )
+            print(f"异常数据已预处理: {len(windows_anomaly)} 个窗口")
+            X_test = windows_anomaly
+        else:
+            print("\n未提供异常数据用于测试")
+            X_test = None
         
         # 步骤2: PSO优化（论文核心贡献）
         print("\n2. PSO超参数优化...")
@@ -215,34 +236,40 @@ class EvoAAE:
         
         print("\n训练完成！")
         
+        # 步骤4: 在验证集（正常数据）上计算异常检测阈值
+        print("\n4. 计算异常检测阈值...")
+        print("   使用验证集（正常数据）的重建误差来设定阈值...")
+        
+        X_val_tensor = torch.FloatTensor(X_val).to(self.device)
+        self.model.eval()
+        with torch.no_grad():
+            val_recon_errors = self.model.compute_reconstruction_error(X_val_tensor)
+        
+        # 使用95%ile作为阈值（假设95%的正常数据重建误差都在这个值以下）
+        self.threshold = np.percentile(val_recon_errors.cpu().numpy(), 95)
+        print(f"阈值已计算: {self.threshold:.6f}")
+        print(f"   验证集重建误差统计:")
+        print(f"     - 最小值: {val_recon_errors.min():.6f}")
+        print(f"     - 最大值: {val_recon_errors.max():.6f}")
+        print(f"     - 平均值: {val_recon_errors.mean():.6f}")
+        print(f"     - 中位数: {np.median(val_recon_errors.cpu().numpy()):.6f}")
+        print(f"     - 95%ile: {self.threshold:.6f}")
+        
         return self.training_history
     
-    def detect_anomalies(self, X, threshold_percentile=95):
+    def detect_anomalies(self, X):
         """
-        检测异常（论文异常检测方法）
+        检测异常（使用在训练时计算的阈值）
         基于重构误差的阈值方法
         """
         if self.model is None:
             raise ValueError("模型未训练，请先调用fit方法")
         
+        if not hasattr(self, 'threshold') or self.threshold is None:
+            raise ValueError("阈值未计算，请确保在fit方法中已设置阈值")
+        
         # 预处理输入数据
-        if self.config['preprocessing']['apply_spectral_residual']:
-            # 使用训练时的预处理流程
-            # 注意：实际应用中应保存训练时的scaler
-            from sklearn.preprocessing import StandardScaler
-            
-            # 谱残差处理
-            from .preprocessing import spectral_residual_transform
-            X_sr = spectral_residual_transform(X)
-            
-            # 使用训练时的scaler
-            if hasattr(self.preprocessor, 'transform'):
-                X_scaled = self.preprocessor.transform(X_sr)
-            else:
-                X_scaled = X_sr
-        else:
-            # 简单标准化
-            X_scaled = self.preprocessor.transform(X)
+        X_scaled = self.preprocessor.transform(X)
         
         # 滑动窗口切分
         windows = sliding_window_sequence(
@@ -254,12 +281,11 @@ class EvoAAE:
         # 计算重构误差
         reconstruction_errors = self.model.compute_reconstruction_error(windows)
         
-        # 计算异常阈值（基于训练数据分布）
-        # 在实际应用中，这里应该使用训练数据的重构误差分布
-        threshold = np.percentile(reconstruction_errors, threshold_percentile)
+        # 安全检查：处理NaN和Inf值
+        reconstruction_errors = np.nan_to_num(reconstruction_errors, nan=0.0, posinf=1e10, neginf=0.0)
         
-        # 标记异常
-        anomalies = reconstruction_errors > threshold
+        # 使用训练时计算的阈值标记异常
+        anomalies = reconstruction_errors > self.threshold
         
         # 返回结果
         results = {

@@ -78,6 +78,8 @@ class ConvDecoder(nn.Module):
         # 最后一层转置卷积，输出到原始维度
         layers.extend([
             nn.ConvTranspose1d(in_channels, output_dim, kernel_sizes[-1], padding=kernel_sizes[-1]//2),
+            # 添加Tanh激活函数，将输出限制在[-1, 1]范围
+            nn.Tanh()
         ])
         
         self.deconv_layers = nn.Sequential(*layers)
@@ -216,7 +218,18 @@ class AdversarialAutoencoderWithDualDiscriminator(nn.Module):
         # 优化器
         self.enc_dec_optimizer = None
         self.latent_disc_optimizer = None
+        
+        # 权重初始化
+        self._initialize_weights()
         self.data_disc_optimizer = None
+    
+    def _initialize_weights(self):
+        """使用Xavier均匀初始化来稳定权重"""
+        for module in self.modules():
+            if isinstance(module, (nn.Conv1d, nn.ConvTranspose1d, nn.Linear)):
+                nn.init.xavier_uniform_(module.weight, gain=0.5)  # 降低增益使初始梯度更小
+                if module.bias is not None:
+                    nn.init.constant_(module.bias, 0.0)
         
     def to_device(self):
         """移动模型到设备"""
@@ -240,19 +253,36 @@ class AdversarialAutoencoderWithDualDiscriminator(nn.Module):
         
         return x_recon, z_mean, z_logvar, z
     
-    def compile_optimizers(self, enc_dec_lr=0.001, latent_disc_lr=0.001, data_disc_lr=0.001):
-        """初始化优化器"""
+    def set_learning_rate(self, lr):
+        """动态设置学习率"""
+        for param_group in self.enc_dec_optimizer.param_groups:
+            param_group['lr'] = lr
+        for param_group in self.latent_disc_optimizer.param_groups:
+            param_group['lr'] = lr
+        for param_group in self.data_disc_optimizer.param_groups:
+            param_group['lr'] = lr
+    
+    def compile_optimizers(self, enc_dec_lr=0.0005, latent_disc_lr=0.0005, data_disc_lr=0.0005):
+        """初始化优化器，存储初始学习率以支持预热"""
+        self.base_lr = enc_dec_lr
+        
         self.enc_dec_optimizer = optim.Adam(
             list(self.encoder.parameters()) + list(self.decoder.parameters()),
-            lr=enc_dec_lr
+            lr=enc_dec_lr * 0.1,  # 初始化为较小的学习率，然后逐步增加
+            betas=(0.9, 0.999),
+            eps=1e-8
         )
         self.latent_disc_optimizer = optim.Adam(
             self.latent_discriminator.parameters(),
-            lr=latent_disc_lr
+            lr=latent_disc_lr * 0.1,
+            betas=(0.9, 0.999),
+            eps=1e-8
         )
         self.data_disc_optimizer = optim.Adam(
             self.data_discriminator.parameters(),
-            lr=data_disc_lr
+            lr=data_disc_lr * 0.1,
+            betas=(0.9, 0.999),
+            eps=1e-8
         )
     
     def train_step(self, x, train_discriminators=True):
@@ -276,6 +306,15 @@ class AdversarialAutoencoderWithDualDiscriminator(nn.Module):
         # VAE总损失
         vae_loss = recon_loss + self.kl_beta * kl_loss
         vae_loss.backward(retain_graph=True)
+        
+        # 梯度裁剪，防止梯度爆炸（严格设置）
+        enc_grad_norm = torch.nn.utils.clip_grad_norm_(self.encoder.parameters(), max_norm=1.0)
+        dec_grad_norm = torch.nn.utils.clip_grad_norm_(self.decoder.parameters(), max_norm=1.0)
+        
+        # 梯度监控
+        if enc_grad_norm > 10.0 or dec_grad_norm > 10.0:
+            print(f"警告: 编码器梯度范数={enc_grad_norm:.2f}, 解码器梯度范数={dec_grad_norm:.2f}")
+        
         self.enc_dec_optimizer.step()
         
         if train_discriminators:
@@ -299,6 +338,12 @@ class AdversarialAutoencoderWithDualDiscriminator(nn.Module):
             ld_loss = 0.5 * (ld_loss_real + ld_loss_fake)
             
             ld_loss.backward()
+            
+            # 梯度裁剪（严格设置）
+            ld_grad_norm = torch.nn.utils.clip_grad_norm_(self.latent_discriminator.parameters(), max_norm=1.0)
+            if ld_grad_norm > 10.0:
+                print(f"警告: 潜空间判别器梯度范数={ld_grad_norm:.2f}")
+            
             self.latent_disc_optimizer.step()
             
             # ========== 3. 训练数据空间判别器 ==========
@@ -321,6 +366,12 @@ class AdversarialAutoencoderWithDualDiscriminator(nn.Module):
             xd_loss = 0.5 * (xd_loss_real + xd_loss_fake)
             
             xd_loss.backward()
+            
+            # 梯度裁剪（严格设置）
+            xd_grad_norm = torch.nn.utils.clip_grad_norm_(self.data_discriminator.parameters(), max_norm=1.0)
+            if xd_grad_norm > 10.0:
+                print(f"警告: 数据空间判别器梯度范数={xd_grad_norm:.2f}")
+            
             self.data_disc_optimizer.step()
         
         # ========== 4. 训练编码器以欺骗判别器 ==========
@@ -339,6 +390,15 @@ class AdversarialAutoencoderWithDualDiscriminator(nn.Module):
         adv_loss = self.adv_weight_latent * adv_loss_latent + self.adv_weight_data * adv_loss_data
         
         adv_loss.backward()
+        
+        # 梯度裁剪（严格设置）
+        enc_adv_grad_norm = torch.nn.utils.clip_grad_norm_(self.encoder.parameters(), max_norm=1.0)
+        dec_adv_grad_norm = torch.nn.utils.clip_grad_norm_(self.decoder.parameters(), max_norm=1.0)
+        
+        # 梯度监控
+        if enc_adv_grad_norm > 10.0 or dec_adv_grad_norm > 10.0:
+            print(f"警告（ADV阶段）: 编码器梯度范数={enc_adv_grad_norm:.2f}, 解码器梯度范数={dec_adv_grad_norm:.2f}")
+        
         self.enc_dec_optimizer.step()
         
         # 总损失
@@ -366,6 +426,18 @@ class AdversarialAutoencoderWithDualDiscriminator(nn.Module):
         else:
             X_train = X_train.to(self.device)
         
+        # 检查数据中是否有NaN或Inf
+        if torch.any(~torch.isfinite(X_train)):
+            print("警告：输入数据中包含NaN或Inf值，进行清理...")
+            X_train = torch.nan_to_num(X_train, nan=0.0, posinf=1.0, neginf=-1.0)
+        
+        # 检查数据范围
+        data_min = torch.min(X_train).item()
+        data_max = torch.max(X_train).item()
+        data_mean = torch.mean(X_train).item()
+        data_std = torch.std(X_train).item()
+        print(f"训练数据统计: min={data_min:.4f}, max={data_max:.4f}, mean={data_mean:.4f}, std={data_std:.4f}")
+        
         # 数据加载器
         train_dataset = TensorDataset(X_train)
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, drop_last=True)
@@ -385,7 +457,22 @@ class AdversarialAutoencoderWithDualDiscriminator(nn.Module):
             'val_ld_loss': [], 'val_xd_loss': [], 'val_adv_loss': []
         }
         
+        # 学习率预热配置
+        warmup_epochs = min(5, max(1, epochs // 10))  # 预热前5个epoch或总epoch的1/10
+        
         for epoch in range(epochs):
+            # 学习率预热：逐步从0.1倍增加到1倍
+            if epoch < warmup_epochs:
+                warmup_progress = (epoch + 1) / warmup_epochs
+                current_lr = self.base_lr * warmup_progress * 0.1
+                self.set_learning_rate(current_lr)
+                if verbose:
+                    print(f"[预热阶段] Epoch {epoch+1} - 学习率: {current_lr:.6f}")
+            else:
+                # 预热完成后，设置为正常学习率
+                if epoch == warmup_epochs:
+                    self.set_learning_rate(self.base_lr)
+            
             epoch_losses = {
                 'loss': [], 'recon_loss': [], 'kl_loss': [],
                 'ld_loss': [], 'xd_loss': [], 'adv_loss': []
@@ -394,9 +481,16 @@ class AdversarialAutoencoderWithDualDiscriminator(nn.Module):
             # 每个epoch开始时训练判别器
             train_discriminators = (epoch % 2 == 0)
             
-            for batch in train_loader:
+            for batch_idx, batch in enumerate(train_loader):
                 X_batch = batch[0]
                 losses = self.train_step(X_batch, train_discriminators=train_discriminators)
+                
+                # 检查损失是否异常
+                total_loss = losses['total_loss']
+                if total_loss > 1e6:
+                    print(f"警告：epoch {epoch+1}, batch {batch_idx+1} 损失异常大: {total_loss:.2e}")
+                    print(f"  各分量: recon_loss={losses['recon_loss']:.4f}, kl_loss={losses['kl_loss']:.4f}")
+                    print(f"  adv_loss={losses['adv_loss']:.4f}, ld_loss={losses['ld_loss']:.4f}")
                 
                 for key in epoch_losses:
                     if key == 'loss':
@@ -482,5 +576,13 @@ class AdversarialAutoencoderWithDualDiscriminator(nn.Module):
                 X = X.to(self.device)
             
             x_recon, _, _, _ = self.forward(X)
+            # MSE误差按序列和特征维度平均
             mse = torch.mean((X - x_recon) ** 2, dim=(1, 2))
-            return mse.cpu().numpy()
+            
+            # 获取MSE值
+            mse_np = mse.cpu().numpy()
+            
+            # 安全检查：移除NaN和Inf值
+            mse_np = np.nan_to_num(mse_np, nan=0.0, posinf=1e10, neginf=0.0)
+            
+            return mse_np

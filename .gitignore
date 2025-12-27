@@ -5,8 +5,11 @@
 __pycache__/
 
 # 数据集和模型文件
-data/
+data/*
 # processed_data/
 
 # 结果文件
-# results/
+res/
+
+analyze_results.py
+train_new.log

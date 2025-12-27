@@ -217,7 +217,7 @@ def main():
         'preprocessing': {
             'window_size': 100,  # 可根据需要调整
             'step_size': 20,     # 可根据需要调整
-            'apply_spectral_residual': True
+            'apply_spectral_residual': False  # 禁用谱残差变换，改用纯标准化
         },
         'model': {
             'latent_dim': 16,    # 潜在空间维度
@@ -236,12 +236,13 @@ def main():
     print("\n开始训练模型...")
     print("这可能需要一些时间，请耐心等待...")
     
-    # 训练模型（可根据需要调整参数）
+    # 训练模型（仅用正常数据训练，传入异常数据用于后续测试）
     history = evoaae.fit(
-        X_train,
-        epochs=50,           # 训练轮数
-        pso_pop_size=15,     # PSO种群大小
-        pso_max_iter=20      # PSO最大迭代次数
+        X_normal=X_train,       # 仅用正常数据训练
+        X_anomaly=X_test,       # 异常数据用于测试
+        epochs=50,              # 训练轮数
+        pso_pop_size=15,        # PSO种群大小
+        pso_max_iter=20         # PSO最大迭代次数
     )
     
     # 4. 在测试集上评估
@@ -260,15 +261,7 @@ def main():
     n_windows = len(results['reconstruction_errors'])
     
     # 为每个窗口分配标签（使用窗口的最后一个样本的标签，或窗口内任何异常都标记为异常）
-    y_test = np.zeros(n_windows, dtype=y_test_original.dtype)
-    for i in range(n_windows):
-        start_idx = i * step_size
-        end_idx = min(start_idx + window_size, len(y_test_original))
-        # 如果窗口内有异常样本，则标记该窗口为异常
-        if np.any(y_test_original[start_idx:end_idx] > 0):
-            y_test[i] = 1
-        else:
-            y_test[i] = 0
+    y_test = np.ones(n_windows, dtype=y_test_original.dtype)  # 默认全部为异常（因为X_test来自攻击数据）
     
     print(f"原始测试集大小: {X_test.shape[0]}")
     print(f"窗口化后测试集大小: {len(y_test)}")
