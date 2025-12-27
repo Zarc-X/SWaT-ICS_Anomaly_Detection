@@ -3,14 +3,10 @@
 
 # Python缓存文件
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
 
 # 数据集和模型文件
 data/
-processed_data/
-models/
+# processed_data/
 
 # 结果文件
-results/
+# results/
