@@ -36,8 +36,8 @@ class EvoAAE:
             'model': {
                 'latent_dim': 8,
                 'kl_beta': 1.0,
-                'adv_weight_latent': 1.0,
-                'adv_weight_data': 1.0,
+                'adv_weight_latent': 0.1,
+                'adv_weight_data': 0.1,
                 'conv_channels': [32, 64],
                 'kernel_sizes': [3, 3]
             }
@@ -252,18 +252,18 @@ class EvoAAE:
         val_min = np.min(val_recon_errors)
         val_max = np.max(val_recon_errors)
         val_std = np.std(val_recon_errors)
-        thr_percentile = np.percentile(val_recon_errors, 99)
-        thr_gaussian = val_mean + 3 * val_std
+        thr_percentile = np.percentile(val_recon_errors, 90)
+        thr_gaussian = val_mean + 2 * val_std
         self.threshold = max(thr_percentile, thr_gaussian)
         
         print(f"阈值已计算: {self.threshold:.6f}")
-        print(f"   (99%分位: {thr_percentile:.6f}, 均值+3σ: {thr_gaussian:.6f})")
+        print(f"   (90%分位: {thr_percentile:.6f}, 均值+3σ: {thr_gaussian:.6f})")
         print(f"   验证集重建误差统计:")
         print(f"     - 最小值: {val_min:.6f}")
         print(f"     - 最大值: {val_max:.6f}")
         print(f"     - 平均值: {val_mean:.6f}")
         print(f"     - 中位数: {val_median:.6f}")
-        print(f"     - 99%ile: {thr_percentile:.6f}")
+        print(f"     - 90%ile: {thr_percentile:.6f}")
         
         return self.training_history
     

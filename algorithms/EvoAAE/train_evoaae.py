@@ -235,8 +235,8 @@ def main():
         'model': {
             'latent_dim': 16,    # 潜在空间维度
             'kl_beta': 0.5,      # KL散度权重
-            'adv_weight_latent': 1.0,
-            'adv_weight_data': 1.0
+            'adv_weight_latent': 0.1,
+            'adv_weight_data': 0.1
         }
     }
     
@@ -296,7 +296,7 @@ def main():
     fig, axes = plt.subplots(2, 2, figsize=(16, 10))
     
     # 训练损失曲线
-    axes[0, 0].plot(history['loss'], label='训练损失', linewidth=2)
+    axes[0, 0].plot(history['loss'], label='Training Loss', linewidth=2)
     if 'val_loss' in history:
         axes[0, 0].plot(history['val_loss'], label='Validation Loss', linewidth=2)
     axes[0, 0].set_title('Training Loss Curve', fontsize=14, fontweight='bold')

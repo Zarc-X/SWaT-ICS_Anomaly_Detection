@@ -1,17 +1,17 @@
 {
-  "timestamp": "2025-12-28T08:26:10.645321",
+  "timestamp": "2025-12-28T10:29:30.299959",
   "training_epochs": 50,
-  "final_loss": 2.15891311630126,
-  "anomaly_detection_threshold": 10.12216854095459,
-  "anomalies_detected": 334,
-  "anomaly_percentage": 7.43047830923248,
+  "final_loss": 1.1448010686905152,
+  "anomaly_detection_threshold": 5.531522750854492,
+  "anomalies_detected": 357,
+  "anomaly_percentage": 7.942157953281424,
   "metrics": {
-    "threshold": 10.12216854095459,
-    "anomaly_count": 334.0,
-    "anomaly_percentage": 7.43047830923248,
-    "mean_reconstruction_error": 4.972808361053467,
-    "precision": 1.0,
-    "recall": 0.47375886524822697,
-    "f1_score": 0.6429258902791145
+    "threshold": 5.531522750854492,
+    "anomaly_count": 357.0,
+    "anomaly_percentage": 7.942157953281424,
+    "mean_reconstruction_error": 4.92017936706543,
+    "precision": 0.9971988795518207,
+    "recall": 0.5049645390070922,
+    "f1_score": 0.6704331450094162
   }
 }

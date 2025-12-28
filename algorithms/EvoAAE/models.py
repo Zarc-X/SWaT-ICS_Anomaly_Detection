@@ -133,11 +133,11 @@ class ConvDiscriminator(nn.Module):
         self.conv_output_dim = conv_channels[-1]
         
         # 分类头
+        # 输出原始logits，配合 BCEWithLogitsLoss；不要提前Sigmoid
         self.fc = nn.Sequential(
             nn.Linear(self.conv_output_dim, 32),
             nn.LeakyReLU(0.2, inplace=True),
-            nn.Linear(32, 1),
-            nn.Sigmoid()
+            nn.Linear(32, 1)
         )
     
     def forward(self, x):
@@ -158,9 +158,6 @@ class ConvDiscriminator(nn.Module):
         
         # 分类
         output = self.fc(pooled)
-        
-        # 确保输出在[0, 1]范围内
-        output = torch.clamp(output, 1e-7, 1-1e-7)
         
         return output
 
@@ -262,7 +259,7 @@ class AdversarialAutoencoderWithDualDiscriminator(nn.Module):
         for param_group in self.data_disc_optimizer.param_groups:
             param_group['lr'] = lr
     
-    def compile_optimizers(self, enc_dec_lr=0.0005, latent_disc_lr=0.0005, data_disc_lr=0.0005):
+    def compile_optimizers(self, enc_dec_lr=0.001, latent_disc_lr=0.0005, data_disc_lr=0.0005):
         """初始化优化器，存储初始学习率以支持预热"""
         self.base_lr = enc_dec_lr
         
@@ -288,8 +285,9 @@ class AdversarialAutoencoderWithDualDiscriminator(nn.Module):
     def train_step(self, x, train_discriminators=True):
         """单步训练（论文Algorithm 3）"""
         batch_size = x.size(0)
-        real_labels = torch.ones(batch_size, 1).to(self.device)
-        fake_labels = torch.zeros(batch_size, 1).to(self.device)
+        # light label smoothing to stabilize GAN
+        real_labels = torch.full((batch_size, 1), 0.95, device=self.device)
+        fake_labels = torch.full((batch_size, 1), 0.05, device=self.device)
         
         # ========== 1. 训练编码器-解码器（重构+KL损失） ==========
         self.enc_dec_optimizer.zero_grad()
@@ -328,11 +326,11 @@ class AdversarialAutoencoderWithDualDiscriminator(nn.Module):
             with torch.no_grad():
                 _, _, _, z_fake = self.forward(x)
             
-            # 判别器输出
+            # 判别器输出（logits）
             d_real = self.latent_discriminator(z_real.unsqueeze(1))
             d_fake = self.latent_discriminator(z_fake.unsqueeze(1))
             
-            # 计算对抗损失
+            # 计算对抗损失（BCEWithLogitsLoss直接接收logits）
             ld_loss_real = self.adv_criterion(d_real, real_labels)
             ld_loss_fake = self.adv_criterion(d_fake, fake_labels)
             ld_loss = 0.5 * (ld_loss_real + ld_loss_fake)
@@ -356,7 +354,7 @@ class AdversarialAutoencoderWithDualDiscriminator(nn.Module):
             with torch.no_grad():
                 x_fake, _, _, _ = self.forward(x)
             
-            # 判别器输出
+            # 判别器输出（logits）
             d_real_data = self.data_discriminator(x_real)
             d_fake_data = self.data_discriminator(x_fake)
             
@@ -457,8 +455,8 @@ class AdversarialAutoencoderWithDualDiscriminator(nn.Module):
             'val_ld_loss': [], 'val_xd_loss': [], 'val_adv_loss': []
         }
         
-        # 学习率预热配置
-        warmup_epochs = min(5, max(1, epochs // 10))  # 预热前5个epoch或总epoch的1/10
+        # 学习率预热配置（保持不变）
+        warmup_epochs = min(5, max(1, epochs // 10))
         
         for epoch in range(epochs):
             # 学习率预热：逐步从0.1倍增加到1倍
@@ -478,8 +476,8 @@ class AdversarialAutoencoderWithDualDiscriminator(nn.Module):
                 'ld_loss': [], 'xd_loss': [], 'adv_loss': []
             }
             
-            # 每个epoch开始时训练判别器
-            train_discriminators = (epoch % 2 == 0)
+            # 每个batch都训练判别器，增强对抗信号
+            train_discriminators = True
             
             for batch_idx, batch in enumerate(train_loader):
                 X_batch = batch[0]
@@ -531,28 +529,23 @@ class AdversarialAutoencoderWithDualDiscriminator(nn.Module):
             # 判别器损失
             batch_size = X.size(0)
             z_real = torch.randn(batch_size, self.latent_dim).to(self.device)
-            real_labels = torch.ones(batch_size, 1).to(self.device)
-            fake_labels = torch.zeros(batch_size, 1).to(self.device)
+            # label smoothing in eval path as well
+            real_labels = torch.full((batch_size, 1), 0.95, device=self.device)
+            fake_labels = torch.full((batch_size, 1), 0.05, device=self.device)
             
             # 潜在判别器损失
             ld_real = self.latent_discriminator(z_real.unsqueeze(1))
             ld_fake = self.latent_discriminator(z.unsqueeze(1))
-            ld_real = torch.clamp(ld_real, 1e-7, 1-1e-7)
-            ld_fake = torch.clamp(ld_fake, 1e-7, 1-1e-7)
             ld_loss = 0.5 * (self.adv_criterion(ld_real, real_labels) + self.adv_criterion(ld_fake, fake_labels))
             
             # 数据判别器损失
             xd_real = self.data_discriminator(X)
             xd_fake = self.data_discriminator(x_recon)
-            xd_real = torch.clamp(xd_real, 1e-7, 1-1e-7)
-            xd_fake = torch.clamp(xd_fake, 1e-7, 1-1e-7)
             xd_loss = 0.5 * (self.adv_criterion(xd_real, real_labels) + self.adv_criterion(xd_fake, fake_labels))
             
             # 对抗损失
-            ld_fake_clamp = torch.clamp(ld_fake, 1e-7, 1-1e-7)
-            xd_fake_clamp = torch.clamp(xd_fake, 1e-7, 1-1e-7)
-            adv_loss = self.adv_weight_latent * self.adv_criterion(ld_fake_clamp, real_labels) + \
-                       self.adv_weight_data * self.adv_criterion(xd_fake_clamp, real_labels)
+            adv_loss = self.adv_weight_latent * self.adv_criterion(ld_fake, real_labels) + \
+                       self.adv_weight_data * self.adv_criterion(xd_fake, real_labels)
             
             total_loss = recon_loss + self.kl_beta * kl_loss + adv_loss
         
