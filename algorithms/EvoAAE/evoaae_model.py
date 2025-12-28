@@ -244,20 +244,26 @@ class EvoAAE:
         self.model.eval()
         val_recon_errors = self.model.compute_reconstruction_error(X_val_tensor)
         
-        # 使用95%ile作为阈值（假设95%的正常数据重建误差都在这个值以下）
-        self.threshold = np.percentile(val_recon_errors, 95)
+        # 阈值策略：更保守，减少误报
+        # 1) 高分位数（99%）
+        # 2) 均值 + 3*std（高斯假设下约对应99.7%）
         val_mean = np.mean(val_recon_errors)
         val_median = np.median(val_recon_errors)
         val_min = np.min(val_recon_errors)
         val_max = np.max(val_recon_errors)
+        val_std = np.std(val_recon_errors)
+        thr_percentile = np.percentile(val_recon_errors, 99)
+        thr_gaussian = val_mean + 3 * val_std
+        self.threshold = max(thr_percentile, thr_gaussian)
         
         print(f"阈值已计算: {self.threshold:.6f}")
+        print(f"   (99%分位: {thr_percentile:.6f}, 均值+3σ: {thr_gaussian:.6f})")
         print(f"   验证集重建误差统计:")
         print(f"     - 最小值: {val_min:.6f}")
         print(f"     - 最大值: {val_max:.6f}")
         print(f"     - 平均值: {val_mean:.6f}")
         print(f"     - 中位数: {val_median:.6f}")
-        print(f"     - 95%ile: {self.threshold:.6f}")
+        print(f"     - 99%ile: {thr_percentile:.6f}")
         
         return self.training_history
     
@@ -289,12 +295,13 @@ class EvoAAE:
         reconstruction_errors = np.nan_to_num(reconstruction_errors, nan=0.0, posinf=1e10, neginf=0.0)
         
         # 使用训练时计算的阈值标记异常
-        anomalies = reconstruction_errors > self.threshold
+        threshold_value = self.threshold
+        anomalies = reconstruction_errors > threshold_value
         
         # 返回结果
         results = {
             'reconstruction_errors': reconstruction_errors,
-            'threshold': threshold,
+            'threshold': threshold_value,
             'anomalies': anomalies,
             'anomaly_count': np.sum(anomalies),
             'anomaly_percentage': np.mean(anomalies) * 100

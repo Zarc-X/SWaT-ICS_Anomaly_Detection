@@ -22,29 +22,42 @@ def load_swat_data(normal_path, attack_path):
     print("加载数据...")
     
     # 加载Excel文件
-    normal_data = pd.read_excel(normal_path)
-    attack_data = pd.read_excel(attack_path)
+    normal_df = pd.read_excel(normal_path)
+    attack_df = pd.read_excel(attack_path)
 
-    # 强制转换为数值类型，无法转换的值设为NaN后再填充，避免FFT遇到非数值
-    normal_data = normal_data.apply(pd.to_numeric, errors='coerce')
-    attack_data = attack_data.apply(pd.to_numeric, errors='coerce')
+    # 确保存在标签列
+    if 'Label' not in normal_df.columns or 'Label' not in attack_df.columns:
+        raise ValueError("数据集中缺少Label列，请检查输入文件")
 
-    # 用前向/后向填充处理缺失，再用0兜底
-    normal_data = normal_data.ffill().bfill().fillna(0.0)
-    attack_data = attack_data.ffill().bfill().fillna(0.0)
-    
-    print(f"正常数据形状: {normal_data.shape}")
-    print(f"攻击数据形状: {attack_data.shape}")
+    def split_features_labels(df):
+        labels_raw = df['Label'].astype(str).str.strip().str.lower()
+        # 处理异常空格拼写
+        labels_raw = labels_raw.replace({'a ttack': 'attack'})
+        label_map = {'normal': 0, 'attack': 1}
+        labels = labels_raw.map(label_map)
+        if labels.isna().any():
+            raise ValueError(f"存在无法识别的标签值: {labels_raw[labels.isna()].unique()}")
+
+        features = df.drop(columns=['Label'])
+        # 强制转换为数值类型，无法转换的值设为NaN后再填充，避免FFT遇到非数值
+        features = features.apply(pd.to_numeric, errors='coerce')
+        features = features.ffill().bfill().fillna(0.0)
+        return features, labels
+
+    normal_features, normal_labels = split_features_labels(normal_df)
+    attack_features, attack_labels = split_features_labels(attack_df)
+
+    print(f"正常数据形状 (不含标签): {normal_features.shape}")
+    print(f"攻击数据形状 (不含标签): {attack_features.shape}")
+    print(f"正常数据标签分布: {normal_labels.value_counts().to_dict()}")
+    print(f"攻击数据标签分布: {attack_labels.value_counts().to_dict()}")
     
     # 转换为numpy数组
-    X_train = normal_data.values.astype(np.float32)
-    X_test = attack_data.values.astype(np.float32)
+    X_train = normal_features.values.astype(np.float32)
+    X_test = attack_features.values.astype(np.float32)
+    y_test = attack_labels.values.astype(np.int64)
     
-    # 为测试集创建标签（假设attack数据包含异常）
-    # 注意：如果你的数据集有标签列，请相应修改
-    y_test = np.ones(len(X_test))  # 假设attack数据全是异常
-    
-    return X_train, X_test, y_test, list(normal_data.columns)
+    return X_train, X_test, y_test, list(normal_features.columns)
 
 
 def save_intermediate_results(output_dir, X_train, X_test, y_test, 
@@ -255,13 +268,20 @@ def main():
     
     # 调整y_test长度以匹配检测结果
     # 因为滑动窗口会改变序列长度
-    # 保留与检测结果相同长度的标签
     window_size = config['preprocessing']['window_size']
     step_size = config['preprocessing']['step_size']
+
+    def window_labels(labels, w, s):
+        labels = np.asarray(labels)
+        windows = []
+        for start in range(0, len(labels) - w + 1, s):
+            window = labels[start:start + w]
+            # 窗口内只要有一次Attack则标记为1，否则0
+            windows.append(int(np.max(window)))
+        return np.array(windows, dtype=labels.dtype)
+
+    y_test = window_labels(y_test_original, window_size, step_size)
     n_windows = len(results['reconstruction_errors'])
-    
-    # 为每个窗口分配标签（使用窗口的最后一个样本的标签，或窗口内任何异常都标记为异常）
-    y_test = np.ones(n_windows, dtype=y_test_original.dtype)  # 默认全部为异常（因为X_test来自攻击数据）
     
     print(f"原始测试集大小: {X_test.shape[0]}")
     print(f"窗口化后测试集大小: {len(y_test)}")
@@ -278,8 +298,8 @@ def main():
     # 训练损失曲线
     axes[0, 0].plot(history['loss'], label='训练损失', linewidth=2)
     if 'val_loss' in history:
-        axes[0, 0].plot(history['val_loss'], label='验证损失', linewidth=2)
-    axes[0, 0].set_title('训练损失曲线', fontsize=14, fontweight='bold')
+        axes[0, 0].plot(history['val_loss'], label='Validation Loss', linewidth=2)
+    axes[0, 0].set_title('Training Loss Curve', fontsize=14, fontweight='bold')
     axes[0, 0].set_xlabel('Epoch', fontsize=12)
     axes[0, 0].set_ylabel('Loss', fontsize=12)
     axes[0, 0].legend(fontsize=10)
@@ -289,31 +309,31 @@ def main():
     axes[0, 1].hist(results['reconstruction_errors'], bins=100, alpha=0.7, 
                     color='skyblue', edgecolor='black')
     axes[0, 1].axvline(results['threshold'], color='red', linestyle='--', 
-                      linewidth=2, label=f'阈值: {results["threshold"]:.4f}')
-    axes[0, 1].set_title('重构误差分布', fontsize=14, fontweight='bold')
-    axes[0, 1].set_xlabel('重构误差', fontsize=12)
-    axes[0, 1].set_ylabel('频率', fontsize=12)
+                      linewidth=2, label=f'Threshold: {results["threshold"]:.4f}')
+    axes[0, 1].set_title('Reconstruction Error Distribution', fontsize=14, fontweight='bold')
+    axes[0, 1].set_xlabel('Reconstruction Error', fontsize=12)
+    axes[0, 1].set_ylabel('Frequency', fontsize=12)
     axes[0, 1].legend(fontsize=10)
     axes[0, 1].grid(True, alpha=0.3)
     
     # 重构误差时间序列（只显示前5000个样本以提高可读性）
     max_samples = min(5000, len(results['reconstruction_errors']))
     axes[1, 0].plot(results['reconstruction_errors'][:max_samples], 
-                   alpha=0.7, linewidth=1, label='重构误差')
+                         alpha=0.7, linewidth=1, label='Reconstruction Error')
     axes[1, 0].axhline(results['threshold'], color='red', linestyle='--', 
-                      linewidth=2, label=f'阈值: {results["threshold"]:.4f}')
+                             linewidth=2, label=f'Threshold: {results["threshold"]:.4f}')
     
     # 标记异常点
     anomaly_indices_plot = np.where(results['anomalies'][:max_samples])[0]
     if len(anomaly_indices_plot) > 0:
         axes[1, 0].scatter(anomaly_indices_plot, 
                           results['reconstruction_errors'][:max_samples][anomaly_indices_plot],
-                          color='red', s=20, alpha=0.6, label='检测到的异常', zorder=5)
+                          color='red', s=20, alpha=0.6, label='Detected Anomalies', zorder=5)
     
-    axes[1, 0].set_title(f'重构误差时间序列（前{max_samples}个样本）', 
+    axes[1, 0].set_title(f'Reconstruction Error Time Series (first {max_samples} samples)', 
                         fontsize=14, fontweight='bold')
-    axes[1, 0].set_xlabel('样本索引', fontsize=12)
-    axes[1, 0].set_ylabel('重构误差', fontsize=12)
+    axes[1, 0].set_xlabel('Sample Index', fontsize=12)
+    axes[1, 0].set_ylabel('Reconstruction Error', fontsize=12)
     axes[1, 0].legend(fontsize=10)
     axes[1, 0].grid(True, alpha=0.3)
     

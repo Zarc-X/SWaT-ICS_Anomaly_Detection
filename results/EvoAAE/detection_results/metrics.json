@@ -1,0 +1,9 @@
+{
+  "threshold": 10.12216854095459,
+  "anomaly_count": 334.0,
+  "anomaly_percentage": 7.43047830923248,
+  "mean_reconstruction_error": 4.972808361053467,
+  "precision": 1.0,
+  "recall": 0.47375886524822697,
+  "f1_score": 0.6429258902791145
+}
